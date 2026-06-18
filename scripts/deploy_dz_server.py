@@ -3,15 +3,18 @@
 Deploy DZ Tavern backend services on a Linux server.
 
 What it does:
-  1. Installs Git, JDK 17, Maven, MySQL and Nginx with the system package manager.
-  2. Clones or updates https://github.com/bufujiugan/dz.git.
-  3. Builds dz-api and dz-admin with Maven.
-  4. Creates the dz database and dz_app database user.
-  5. Writes /etc/dz/dz.env.
-  6. Installs and restarts systemd services: dz-api and dz-admin.
-  7. Optionally writes an Nginx reverse proxy config.
+  1. Installs Git, MySQL and Nginx with the system package manager.
+  2. Installs JDK 17 and Maven under /install by default.
+  3. Clones or updates https://github.com/bufujiugan/dz.git under /works/dz.
+  4. Builds dz-api and dz-admin with Maven.
+  5. Creates the dz database and dz_app database user.
+  6. Writes /etc/dz/dz.env.
+  7. Installs and restarts systemd services: dz-api and dz-admin.
+  8. Optionally writes an Nginx reverse proxy config.
 
 Run as root:
+  mkdir -p /opt/python-scripts
+  cd /opt/python-scripts
   python3 deploy_dz_server.py --configure-nginx --server-name YOUR_SERVER_IP
 """
 
@@ -20,12 +23,15 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import platform
 import secrets
 import shutil
 import subprocess
 import sys
+import tarfile
 import textwrap
 import time
+import urllib.request
 from pathlib import Path
 
 
@@ -33,6 +39,7 @@ DEFAULT_REPO = "https://github.com/bufujiugan/dz.git"
 DEFAULT_BRANCH = "main"
 API_JAR_NAME = "dz-api-1.0.0-SNAPSHOT.jar"
 ADMIN_JAR_NAME = "dz-admin-1.0.0-SNAPSHOT.jar"
+MAVEN_VERSION = "3.9.9"
 
 
 class DeployError(RuntimeError):
@@ -101,13 +108,13 @@ def detect_package_manager() -> str:
     return ""
 
 
-def install_packages(skip_install: bool) -> None:
-    if skip_install:
-        info("Skipping package installation because --skip-install was provided.")
+def install_packages(args: argparse.Namespace) -> None:
+    if args.skip_install:
+        info("Skipping OS package installation because --skip-install was provided.")
         return
 
     manager = detect_package_manager()
-    info(f"Installing required packages with {manager}")
+    info(f"Installing required OS packages with {manager}")
     if manager == "apt-get":
         env = dict(os.environ)
         env["DEBIAN_FRONTEND"] = "noninteractive"
@@ -119,17 +126,16 @@ def install_packages(skip_install: bool) -> None:
                 "-y",
                 "git",
                 "curl",
+                "ca-certificates",
                 "nginx",
                 "mysql-server",
-                "maven",
-                "openjdk-17-jdk",
             ],
             env=env,
         )
         return
 
     if manager in ("dnf", "yum"):
-        base_packages = ["git", "curl", "nginx", "maven", "java-17-openjdk-devel"]
+        base_packages = ["git", "curl", "ca-certificates", "nginx"]
         run([manager, "install", "-y", *base_packages])
         mysql_result = run([manager, "install", "-y", "mysql-server"], check=False)
         if mysql_result.returncode != 0:
@@ -156,6 +162,114 @@ def start_platform_services(skip_mysql: bool) -> str | None:
         mysql_service = start_first_existing_service(["mysql", "mysqld", "mariadb"], required=True)
     start_first_existing_service(["nginx"], required=False)
     return mysql_service
+
+
+def detect_linux_arch() -> str:
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "x64"
+    if machine in ("aarch64", "arm64"):
+        return "aarch64"
+    fail(f"Unsupported CPU architecture for standalone JDK download: {platform.machine()}")
+    return ""
+
+
+def download_file(url: str, target: Path) -> None:
+    if target.exists() and target.stat().st_size > 0:
+        print(f"Using existing download: {target}", flush=True)
+        return
+    info(f"Downloading {url}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(url, timeout=120) as response:
+        with target.open("wb") as output:
+            shutil.copyfileobj(response, output)
+    print(f"Downloaded {target}", flush=True)
+
+
+def safe_extract_tar_gz(archive: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    destination_resolved = destination.resolve()
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar.getmembers():
+            target = (destination / member.name).resolve()
+            if not str(target).startswith(str(destination_resolved)):
+                fail(f"Unsafe archive path detected: {member.name}")
+        tar.extractall(destination)
+
+
+def update_symlink(link_path: Path, target_path: Path) -> None:
+    if link_path.is_symlink() or link_path.exists():
+        if link_path.is_dir() and not link_path.is_symlink():
+            warn(f"{link_path} exists and is a directory, not replacing it.")
+            return
+        link_path.unlink()
+    link_path.symlink_to(target_path, target_is_directory=True)
+
+
+def find_extracted_directory(parent: Path, prefix: str) -> Path:
+    candidates = [path for path in parent.iterdir() if path.is_dir() and path.name.startswith(prefix)]
+    if not candidates:
+        fail(f"No extracted directory starting with {prefix} under {parent}")
+    return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)[0]
+
+
+def install_standalone_java_maven(args: argparse.Namespace) -> None:
+    if args.skip_install:
+        info("Skipping standalone JDK/Maven installation because --skip-install was provided.")
+        args.java_home = Path(os.environ.get("JAVA_HOME", "")) if os.environ.get("JAVA_HOME") else None
+        args.java_bin = Path(shutil.which("java") or "/usr/bin/java")
+        args.maven_home = None
+        args.maven_bin = Path(shutil.which("mvn") or "/usr/bin/mvn")
+        return
+
+    if args.use_system_java_maven:
+        info("Using system Java and Maven because --use-system-java-maven was provided.")
+        if not command_exists("java") or not command_exists("mvn"):
+            manager = detect_package_manager()
+            if manager == "apt-get":
+                env = dict(os.environ)
+                env["DEBIAN_FRONTEND"] = "noninteractive"
+                run(["apt-get", "install", "-y", "maven", "openjdk-17-jdk"], env=env)
+            else:
+                run([manager, "install", "-y", "maven", "java-17-openjdk-devel"])
+        args.java_home = Path(os.environ.get("JAVA_HOME", "")) if os.environ.get("JAVA_HOME") else None
+        args.java_bin = Path(shutil.which("java") or "/usr/bin/java")
+        args.maven_home = None
+        args.maven_bin = Path(shutil.which("mvn") or "/usr/bin/mvn")
+        return
+
+    info(f"Installing standalone JDK 17 and Maven under {args.tools_dir}")
+    arch = detect_linux_arch()
+    downloads_dir = args.tools_dir / "downloads"
+    jdk_extract_dir = args.tools_dir / "jdk-17-extracted"
+    maven_extract_dir = args.tools_dir / "maven-extracted"
+
+    jdk_url = (
+        "https://api.adoptium.net/v3/binary/latest/17/ga/linux/"
+        f"{arch}/jdk/hotspot/normal/eclipse?project=jdk"
+    )
+    jdk_archive = downloads_dir / f"temurin-jdk17-linux-{arch}.tar.gz"
+    download_file(jdk_url, jdk_archive)
+    safe_extract_tar_gz(jdk_archive, jdk_extract_dir)
+    jdk_home = find_extracted_directory(jdk_extract_dir, "jdk-")
+    update_symlink(args.tools_dir / "jdk17", jdk_home)
+
+    maven_url = (
+        "https://archive.apache.org/dist/maven/maven-3/"
+        f"{MAVEN_VERSION}/binaries/apache-maven-{MAVEN_VERSION}-bin.tar.gz"
+    )
+    maven_archive = downloads_dir / f"apache-maven-{MAVEN_VERSION}-bin.tar.gz"
+    download_file(maven_url, maven_archive)
+    safe_extract_tar_gz(maven_archive, maven_extract_dir)
+    maven_home = find_extracted_directory(maven_extract_dir, f"apache-maven-{MAVEN_VERSION}")
+    update_symlink(args.tools_dir / "maven", maven_home)
+
+    args.java_home = args.tools_dir / "jdk17"
+    args.java_bin = args.java_home / "bin" / "java"
+    args.maven_home = args.tools_dir / "maven"
+    args.maven_bin = args.maven_home / "bin" / "mvn"
+    args.maven_repo = args.tools_dir / "maven-repository"
+    args.maven_repo.mkdir(parents=True, exist_ok=True)
 
 
 def sql_string(value: str) -> str:
@@ -236,12 +350,14 @@ def ensure_directories(args: argparse.Namespace) -> None:
     info("Creating deployment directories")
     for path in [
         args.base_dir,
+        args.tools_dir,
         args.source_dir,
         args.app_dir,
         args.backup_dir,
         args.upload_dir,
         args.config_dir,
         args.log_dir,
+        args.maven_repo,
     ]:
         path.mkdir(parents=True, exist_ok=True)
 
@@ -267,7 +383,29 @@ def update_source(args: argparse.Namespace) -> None:
 
 def build_project(args: argparse.Namespace) -> None:
     info("Building project with Maven")
-    run(["mvn", "clean", "package", "-DskipTests"], cwd=args.source_dir)
+    env = dict(os.environ)
+    if args.java_home:
+        env["JAVA_HOME"] = str(args.java_home)
+    if args.maven_home:
+        env["MAVEN_HOME"] = str(args.maven_home)
+    env["PATH"] = os.pathsep.join(
+        [
+            str(args.maven_bin.parent),
+            str(args.java_bin.parent),
+            env.get("PATH", ""),
+        ]
+    )
+    run(
+        [
+            str(args.maven_bin),
+            "clean",
+            "package",
+            "-DskipTests",
+            f"-Dmaven.repo.local={args.maven_repo}",
+        ],
+        cwd=args.source_dir,
+        env=env,
+    )
 
 
 def find_jar(module_dir: Path, jar_name: str) -> Path:
@@ -390,7 +528,6 @@ def write_runtime_env(args: argparse.Namespace) -> None:
 
 
 def service_unit(name: str, jar_path: Path, args: argparse.Namespace) -> str:
-    java_path = shutil.which("java") or "/usr/bin/java"
     return textwrap.dedent(
         f"""\
         [Unit]
@@ -401,7 +538,7 @@ def service_unit(name: str, jar_path: Path, args: argparse.Namespace) -> str:
         Type=simple
         WorkingDirectory={args.app_dir}
         EnvironmentFile={args.config_dir / "dz.env"}
-        ExecStart={java_path} -jar {jar_path}
+        ExecStart={args.java_bin} -jar {jar_path}
         Restart=always
         RestartSec=5
         SuccessExitStatus=143
@@ -523,12 +660,18 @@ def verify_services() -> None:
 
 def normalize_paths(args: argparse.Namespace) -> None:
     args.base_dir = Path(args.base_dir)
-    args.source_dir = args.base_dir / "source"
-    args.app_dir = args.base_dir / "apps"
-    args.backup_dir = args.base_dir / "backups"
-    args.upload_dir = Path(args.upload_dir) if args.upload_dir else args.base_dir / "uploads"
+    args.tools_dir = Path(args.tools_dir)
+    args.source_dir = Path(args.source_dir) if args.source_dir else args.base_dir / "dz"
+    args.app_dir = Path(args.app_dir) if args.app_dir else args.base_dir / "dz-apps"
+    args.backup_dir = Path(args.backup_dir) if args.backup_dir else args.base_dir / "dz-backups"
+    args.upload_dir = Path(args.upload_dir) if args.upload_dir else args.base_dir / "dz-uploads"
     args.config_dir = Path(args.config_dir)
     args.log_dir = Path(args.log_dir)
+    args.maven_repo = Path(args.maven_repo) if args.maven_repo else args.tools_dir / "maven-repository"
+    args.java_home = None
+    args.java_bin = Path(shutil.which("java") or "/usr/bin/java")
+    args.maven_home = None
+    args.maven_bin = Path(shutil.which("mvn") or "/usr/bin/mvn")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -537,10 +680,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--repo", default=DEFAULT_REPO, help="Git repository URL.")
     parser.add_argument("--branch", default=DEFAULT_BRANCH, help="Git branch to deploy.")
-    parser.add_argument("--base-dir", default="/opt/dz", help="Base deployment directory.")
+    parser.add_argument("--base-dir", default="/works", help="Base project directory.")
+    parser.add_argument("--source-dir", default="", help="Git working tree. Default: BASE_DIR/dz.")
+    parser.add_argument("--app-dir", default="", help="Runtime jar directory. Default: BASE_DIR/dz-apps.")
+    parser.add_argument("--backup-dir", default="", help="Backup directory. Default: BASE_DIR/dz-backups.")
+    parser.add_argument("--tools-dir", default="/install", help="Standalone tool directory.")
+    parser.add_argument(
+        "--maven-repo",
+        default="",
+        help="Maven local repository. Default: TOOLS_DIR/maven-repository.",
+    )
     parser.add_argument("--config-dir", default="/etc/dz", help="Directory for dz.env.")
     parser.add_argument("--log-dir", default="/var/log/dz", help="Directory for service logs.")
-    parser.add_argument("--upload-dir", default="", help="Upload directory. Default: BASE_DIR/uploads.")
+    parser.add_argument("--upload-dir", default="", help="Upload directory. Default: BASE_DIR/dz-uploads.")
 
     parser.add_argument("--db-name", default="dz", help="MySQL database name.")
     parser.add_argument("--db-user", default="dz_app", help="MySQL application user.")
@@ -569,7 +721,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--wechat-api-v3-key", default="", help="WeChat Pay API v3 key.")
 
-    parser.add_argument("--skip-install", action="store_true", help="Do not install OS packages.")
+    parser.add_argument(
+        "--skip-install",
+        action="store_true",
+        help="Do not install OS packages or standalone JDK/Maven.",
+    )
+    parser.add_argument(
+        "--use-system-java-maven",
+        action="store_true",
+        help="Install/use system JDK and Maven instead of /install standalone tools.",
+    )
     parser.add_argument("--skip-mysql", action="store_true", help="Do not initialize MySQL.")
     parser.add_argument(
         "--configure-nginx",
@@ -604,6 +765,15 @@ def print_summary(args: argparse.Namespace, generated: dict[str, str]) -> None:
               tail -f {args.log_dir}/dz-api.out.log
               tail -f {args.log_dir}/dz-admin.out.log
 
+            Paths:
+              script directory: /opt/python-scripts
+              source directory: {args.source_dir}
+              runtime jars: {args.app_dir}
+              backups: {args.backup_dir}
+              uploads: {args.upload_dir}
+              tools: {args.tools_dir}
+              Maven local repository: {args.maven_repo}
+
             Admin URL:
               http://{public_host}/admin/
 
@@ -634,9 +804,10 @@ def main() -> int:
 
     try:
         require_root()
-        install_packages(args.skip_install)
-        start_platform_services(args.skip_mysql)
+        install_packages(args)
         ensure_directories(args)
+        install_standalone_java_maven(args)
+        start_platform_services(args.skip_mysql)
         configure_mysql(args, generated)
         collect_runtime_config(args, generated)
         update_source(args)
