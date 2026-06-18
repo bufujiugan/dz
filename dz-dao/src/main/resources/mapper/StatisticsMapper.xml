@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.StatisticsMapper">
+    <sql id="salesConditions">
+        o.deleted = 0
+        AND o.status IN ('PAID', 'COMPLETED')
+        AND o.pay_time &gt;= #{startTime}
+        AND o.pay_time &lt; #{endTime}
+        <if test="storeId != null">AND o.store_id = #{storeId}</if>
+    </sql>
+    <select id="selectSummary" resultType="com.dz.tavern.dao.projection.SalesSummaryRow">
+        SELECT COALESCE(SUM(o.total_fen), 0) AS sales_fen,
+               COUNT(*) AS order_count,
+               COALESCE((
+                   SELECT SUM(oi.quantity)
+                   FROM order_item oi
+                   JOIN `order` item_order ON item_order.id = oi.order_id
+                   WHERE oi.deleted = 0
+                     AND item_order.deleted = 0
+                     AND item_order.status IN ('PAID', 'COMPLETED')
+                     AND item_order.pay_time &gt;= #{startTime}
+                     AND item_order.pay_time &lt; #{endTime}
+                     <if test="storeId != null">AND item_order.store_id = #{storeId}</if>
+               ), 0) AS item_quantity
+        FROM `order` o
+        WHERE <include refid="salesConditions"/>
+    </select>
+    <select id="selectDailySales" resultType="com.dz.tavern.dao.projection.DailySalesRow">
+        SELECT DATE(o.pay_time) AS sale_date,
+               SUM(o.total_fen) AS sales_fen,
+               COUNT(*) AS order_count
+        FROM `order` o
+        WHERE <include refid="salesConditions"/>
+        GROUP BY DATE(o.pay_time)
+        ORDER BY sale_date
+    </select>
+    <select id="selectProductSales" resultType="com.dz.tavern.dao.projection.ProductSalesRow">
+        SELECT oi.sku_id, oi.product_name, oi.spec_name,
+               SUM(oi.quantity) AS quantity,
+               SUM(oi.price_fen * oi.quantity) AS sales_fen
+        FROM `order` o
+        JOIN order_item oi ON oi.order_id = o.id AND oi.deleted = 0
+        WHERE <include refid="salesConditions"/>
+        GROUP BY oi.sku_id, oi.product_name, oi.spec_name
+        ORDER BY quantity DESC, sales_fen DESC
+        LIMIT #{limit}
+    </select>
+</mapper>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.ProductMapper">
+    <sql id="conditions">
+        deleted = 0
+        <if test="storeId != null">AND store_id = #{storeId}</if>
+        <if test="categoryId != null">AND category_id = #{categoryId}</if>
+        <if test="keyword != null and keyword != ''">AND name LIKE CONCAT('%', #{keyword}, '%')</if>
+        <if test="onlyActive">AND status = 1</if>
+    </sql>
+    <select id="selectById" resultType="com.dz.tavern.dao.entity.ProductEntity">
+        SELECT * FROM product WHERE id = #{id} AND deleted = 0
+        <if test="onlyActive">AND status = 1</if>
+    </select>
+    <select id="selectByIds" resultType="com.dz.tavern.dao.entity.ProductEntity">
+        SELECT * FROM product WHERE deleted = 0 AND id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        <if test="onlyActive">AND status = 1</if>
+    </select>
+    <select id="selectPage" resultType="com.dz.tavern.dao.entity.ProductEntity">
+        SELECT * FROM product WHERE <include refid="conditions"/>
+        ORDER BY id DESC LIMIT #{offset}, #{size}
+    </select>
+    <select id="countPage" resultType="long">
+        SELECT COUNT(*) FROM product WHERE <include refid="conditions"/>
+    </select>
+    <select id="selectRecommended" resultType="com.dz.tavern.dao.entity.ProductEntity">
+        SELECT * FROM product
+        WHERE store_id = #{storeId} AND status = 1 AND recommended = 1 AND deleted = 0
+        ORDER BY id DESC LIMIT 10
+    </select>
+    <insert id="insertProduct" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO product(store_id, category_id, name, main_image, images, description,
+                            status, recommended, create_time, update_time, deleted)
+        VALUES (#{storeId}, #{categoryId}, #{name}, #{mainImage}, #{images}, #{description},
+                #{status}, #{recommended}, NOW(), NOW(), 0)
+    </insert>
+    <update id="updateProduct">
+        UPDATE product
+        SET category_id = #{categoryId}, name = #{name}, main_image = #{mainImage},
+            images = #{images}, description = #{description}, recommended = #{recommended},
+            update_time = NOW()
+        WHERE id = #{id} AND deleted = 0
+    </update>
+    <update id="updateStatus">
+        UPDATE product SET status = #{status}, update_time = NOW()
+        WHERE id = #{id} AND deleted = 0
+    </update>
+</mapper>

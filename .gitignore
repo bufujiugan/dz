@@ -1,0 +1,10 @@
+target/
+.idea/
+.vscode/
+.codex-run-logs/
+*.iml
+logs/
+uploads/
+.env
+application-local.yml
+*.log

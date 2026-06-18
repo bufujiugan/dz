@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.UserAccountMapper">
+    <select id="selectByUserId" resultType="com.dz.tavern.dao.entity.UserAccountEntity">
+        SELECT * FROM user_account WHERE user_id = #{userId} AND deleted = 0
+    </select>
+    <select id="selectAllForUpdate" resultType="com.dz.tavern.dao.entity.UserAccountEntity">
+        SELECT * FROM user_account WHERE deleted = 0 ORDER BY user_id FOR UPDATE
+    </select>
+    <select id="selectPointsRanking" resultType="com.dz.tavern.dao.projection.PointsRankingRow">
+        SELECT ua.user_id, u.nickname, u.avatar, ua.points
+        FROM user_account ua
+        JOIN `user` u ON u.id = ua.user_id AND u.deleted = 0 AND u.status = 0
+        WHERE ua.deleted = 0
+        ORDER BY ua.points DESC, ua.user_id
+        LIMIT #{limit}
+    </select>
+    <insert id="insertAccount" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO user_account(user_id, balance_fen, points, frozen_points, version,
+                                 create_time, update_time, deleted)
+        VALUES (#{userId}, #{balanceFen}, #{points}, #{frozenPoints}, #{version}, NOW(), NOW(), 0)
+    </insert>
+    <update id="updateAccountOptimistic">
+        UPDATE user_account
+        SET balance_fen = #{balanceFen}, points = #{points}, frozen_points = #{frozenPoints},
+            version = version + 1, update_time = NOW()
+        WHERE user_id = #{userId} AND version = #{version} AND deleted = 0
+    </update>
+    <insert id="insertAccountLog" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO account_log(user_id, asset_type, change_type, change_value,
+                                before_value, after_value, biz_no, operator, remark,
+                                create_time, update_time, deleted)
+        VALUES (#{userId}, #{assetType}, #{changeType}, #{changeValue},
+                #{beforeValue}, #{afterValue}, #{bizNo}, #{operator}, #{remark},
+                NOW(), NOW(), 0)
+    </insert>
+    <sql id="logConditions">
+        al.deleted = 0
+        <if test="storeId != null">AND u.store_id = #{storeId}</if>
+        <if test="userId != null">AND al.user_id = #{userId}</if>
+        <if test="changeType != null and changeType != ''">AND al.change_type = #{changeType}</if>
+        <if test="startTime != null">AND al.create_time &gt;= #{startTime}</if>
+        <if test="endTime != null">AND al.create_time &lt; #{endTime}</if>
+        <if test="bizNo != null and bizNo != ''">AND al.biz_no = #{bizNo}</if>
+    </sql>
+    <select id="selectLogs" resultType="com.dz.tavern.dao.entity.AccountLogEntity">
+        SELECT al.*, u.nickname, u.phone
+        FROM account_log al
+        LEFT JOIN `user` u ON u.id = al.user_id AND u.deleted = 0
+        WHERE <include refid="logConditions"/>
+        ORDER BY al.id DESC LIMIT #{offset}, #{size}
+    </select>
+    <select id="countLogs" resultType="long">
+        SELECT COUNT(*)
+        FROM account_log al
+        LEFT JOIN `user` u ON u.id = al.user_id AND u.deleted = 0
+        WHERE <include refid="logConditions"/>
+    </select>
+</mapper>

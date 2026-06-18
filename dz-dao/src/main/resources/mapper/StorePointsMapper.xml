@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.StorePointsMapper">
+    <select id="selectAccount" resultType="com.dz.tavern.dao.entity.UserStorePointsEntity">
+        SELECT * FROM user_store_points
+        WHERE user_id = #{userId} AND store_id = #{storeId} AND deleted = 0
+    </select>
+    <select id="selectStoreAccountsForUpdate"
+            resultType="com.dz.tavern.dao.entity.UserStorePointsEntity">
+        SELECT * FROM user_store_points
+        WHERE store_id = #{storeId} AND deleted = 0
+        ORDER BY user_id FOR UPDATE
+    </select>
+    <insert id="insertAccount" useGeneratedKeys="true" keyProperty="id">
+        INSERT IGNORE INTO user_store_points(
+            user_id, store_id, points, frozen_points, version,
+            create_time, update_time, deleted
+        ) VALUES (
+            #{userId}, #{storeId}, #{points}, #{frozenPoints}, #{version},
+            NOW(), NOW(), 0
+        )
+    </insert>
+    <update id="updateAccountOptimistic">
+        UPDATE user_store_points
+        SET points = #{points}, frozen_points = #{frozenPoints},
+            version = version + 1, update_time = NOW()
+        WHERE user_id = #{userId} AND store_id = #{storeId}
+          AND version = #{version} AND deleted = 0
+    </update>
+    <select id="selectRanking"
+            resultType="com.dz.tavern.dao.projection.StorePointsRankingRow">
+        SELECT ranked.user_id, ranked.nickname, ranked.avatar, ranked.points, ranked.rank_no AS `rank`
+        FROM (
+            SELECT usp.user_id, u.nickname, u.avatar, usp.points,
+                   ROW_NUMBER() OVER (ORDER BY usp.points DESC, usp.user_id) AS rank_no
+            FROM user_store_points usp
+            JOIN `user` u ON u.id = usp.user_id AND u.status = 0 AND u.deleted = 0
+            WHERE usp.store_id = #{storeId} AND usp.deleted = 0
+        ) ranked
+        ORDER BY ranked.rank_no
+        LIMIT #{limit}
+    </select>
+    <select id="selectUserRanking"
+            resultType="com.dz.tavern.dao.projection.StorePointsRankingRow">
+        SELECT ranked.user_id, ranked.nickname, ranked.avatar, ranked.points, ranked.rank_no AS `rank`
+        FROM (
+            SELECT usp.user_id, u.nickname, u.avatar, usp.points,
+                   ROW_NUMBER() OVER (ORDER BY usp.points DESC, usp.user_id) AS rank_no
+            FROM user_store_points usp
+            JOIN `user` u ON u.id = usp.user_id AND u.status = 0 AND u.deleted = 0
+            WHERE usp.store_id = #{storeId} AND usp.deleted = 0
+        ) ranked
+        WHERE ranked.user_id = #{userId}
+    </select>
+    <sql id="userSummaryConditions">
+        usp.deleted = 0
+        <if test="storeId != null">AND usp.store_id = #{storeId}</if>
+        <if test="keyword != null and keyword != ''">
+            AND (
+                CAST(usp.user_id AS CHAR) = #{keyword}
+                OR u.nickname LIKE CONCAT('%', #{keyword}, '%')
+                OR u.phone LIKE CONCAT('%', #{keyword}, '%')
+            )
+        </if>
+    </sql>
+    <select id="selectUserSummaries"
+            resultType="com.dz.tavern.dao.projection.StorePointsUserSummaryRow">
+        SELECT
+            usp.user_id,
+            MAX(u.nickname) AS nickname,
+            MAX(u.avatar) AS avatar,
+            MAX(u.phone) AS phone,
+            MAX(u.status) AS status,
+            COALESCE(SUM(usp.points), 0) AS total_points,
+            COALESCE(SUM(usp.frozen_points), 0) AS frozen_points,
+            COUNT(*) AS store_count,
+            MAX(usp.update_time) AS last_change_time
+        FROM user_store_points usp
+        LEFT JOIN `user` u ON u.id = usp.user_id AND u.deleted = 0
+        WHERE <include refid="userSummaryConditions"/>
+        GROUP BY usp.user_id
+        ORDER BY total_points DESC, usp.user_id
+        LIMIT #{offset}, #{size}
+    </select>
+    <select id="countUserSummaries" resultType="long">
+        SELECT COUNT(*) FROM (
+            SELECT usp.user_id
+            FROM user_store_points usp
+            LEFT JOIN `user` u ON u.id = usp.user_id AND u.deleted = 0
+            WHERE <include refid="userSummaryConditions"/>
+            GROUP BY usp.user_id
+        ) grouped
+    </select>
+    <insert id="insertRequest" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO store_points_request(
+            store_id, user_id, type, points, remark, status,
+            create_time, update_time, deleted
+        ) VALUES (
+            #{storeId}, #{userId}, #{type}, #{points}, #{remark}, #{status},
+            NOW(), NOW(), 0
+        )
+    </insert>
+    <select id="selectRequestById"
+            resultType="com.dz.tavern.dao.entity.StorePointsRequestEntity">
+        SELECT * FROM store_points_request WHERE id = #{id} AND deleted = 0
+    </select>
+    <sql id="requestConditions">
+        deleted = 0
+        <if test="storeId != null">AND store_id = #{storeId}</if>
+        <if test="userId != null">AND user_id = #{userId}</if>
+        <if test="status != null and status != ''">AND status = #{status}</if>
+    </sql>
+    <select id="selectRequests"
+            resultType="com.dz.tavern.dao.entity.StorePointsRequestEntity">
+        SELECT spr.*, u.nickname, u.phone, u.status AS user_status
+        FROM store_points_request spr
+        LEFT JOIN `user` u ON u.id = spr.user_id AND u.deleted = 0
+        WHERE spr.deleted = 0
+        <if test="storeId != null">AND spr.store_id = #{storeId}</if>
+        <if test="userId != null">AND spr.user_id = #{userId}</if>
+        <if test="status != null and status != ''">AND spr.status = #{status}</if>
+        ORDER BY spr.id DESC LIMIT #{offset}, #{size}
+    </select>
+    <select id="countRequests" resultType="long">
+        SELECT COUNT(*) FROM store_points_request WHERE <include refid="requestConditions"/>
+    </select>
+    <update id="updateRequestAudit">
+        UPDATE store_points_request
+        SET status = #{status}, auditor_id = #{auditorId},
+            audit_remark = #{auditRemark}, audit_time = #{auditTime},
+            before_points = #{beforePoints}, after_points = #{afterPoints},
+            update_time = NOW()
+        WHERE id = #{id} AND status = 'PENDING' AND deleted = 0
+    </update>
+    <insert id="insertLog" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO store_points_log(
+            store_id, user_id, change_type, change_value,
+            before_value, after_value, biz_no, operator, remark,
+            create_time, update_time, deleted
+        ) VALUES (
+            #{storeId}, #{userId}, #{changeType}, #{changeValue},
+            #{beforeValue}, #{afterValue}, #{bizNo}, #{operator}, #{remark},
+            NOW(), NOW(), 0
+        )
+    </insert>
+    <sql id="logConditions">
+        spl.deleted = 0
+        <if test="storeId != null">AND spl.store_id = #{storeId}</if>
+        <if test="userId != null">AND spl.user_id = #{userId}</if>
+    </sql>
+    <select id="selectLogs" resultType="com.dz.tavern.dao.entity.StorePointsLogEntity">
+        SELECT spl.*, u.nickname, u.phone
+        FROM store_points_log spl
+        LEFT JOIN `user` u ON u.id = spl.user_id AND u.deleted = 0
+        WHERE <include refid="logConditions"/>
+        ORDER BY spl.id DESC LIMIT #{offset}, #{size}
+    </select>
+    <select id="countLogs" resultType="long">
+        SELECT COUNT(*) FROM store_points_log spl
+        WHERE <include refid="logConditions"/>
+    </select>
+</mapper>

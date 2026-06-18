@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.ProductSkuMapper">
+    <select id="selectById" resultType="com.dz.tavern.dao.entity.ProductSkuEntity">
+        SELECT * FROM product_sku WHERE id = #{id} AND deleted = 0
+    </select>
+    <select id="selectByIds" resultType="com.dz.tavern.dao.entity.ProductSkuEntity">
+        SELECT * FROM product_sku WHERE deleted = 0 AND id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+    <select id="selectByProductIds" resultType="com.dz.tavern.dao.entity.ProductSkuEntity">
+        SELECT * FROM product_sku WHERE deleted = 0 AND product_id IN
+        <foreach collection="productIds" item="productId" open="(" separator="," close=")">
+            #{productId}
+        </foreach>
+        ORDER BY product_id, id
+    </select>
+    <select id="selectByProductId" resultType="com.dz.tavern.dao.entity.ProductSkuEntity">
+        SELECT * FROM product_sku WHERE product_id = #{productId} AND deleted = 0 ORDER BY id
+    </select>
+    <update id="decreaseStock">
+        UPDATE product_sku
+        SET stock = stock - #{quantity}, sales = sales + #{quantity}, update_time = NOW()
+        WHERE id = #{skuId} AND stock &gt;= #{quantity} AND deleted = 0
+    </update>
+    <update id="increaseStock">
+        UPDATE product_sku
+        SET stock = stock + #{quantity}, sales = GREATEST(sales - #{quantity}, 0), update_time = NOW()
+        WHERE id = #{skuId} AND deleted = 0
+    </update>
+    <insert id="insertSku" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO product_sku(product_id, spec_name, price_fen, stock, sales,
+                                create_time, update_time, deleted)
+        VALUES (#{productId}, #{specName}, #{priceFen}, #{stock}, 0, NOW(), NOW(), 0)
+    </insert>
+    <update id="updateSku">
+        UPDATE product_sku
+        SET spec_name = #{specName}, price_fen = #{priceFen}, stock = #{stock}, update_time = NOW()
+        WHERE id = #{id} AND deleted = 0
+    </update>
+</mapper>

@@ -1,0 +1,16 @@
+package com.dz.tavern.common.model;
+
+public record ApiResponse<T>(int code, String msg, T data) {
+
+    public static <T> ApiResponse<T> ok(T data) {
+        return new ApiResponse<>(0, "ok", data);
+    }
+
+    public static ApiResponse<Void> ok() {
+        return ok(null);
+    }
+
+    public static ApiResponse<Void> fail(int code, String message) {
+        return new ApiResponse<>(code, message, null);
+    }
+}

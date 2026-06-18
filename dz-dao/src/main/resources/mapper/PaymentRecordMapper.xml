@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.PaymentRecordMapper">
+    <select id="selectByOrderNo" resultType="com.dz.tavern.dao.entity.PaymentRecordEntity">
+        SELECT * FROM payment_record WHERE order_no = #{orderNo} AND deleted = 0
+    </select>
+    <insert id="insertRecord" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO payment_record(order_no, transaction_id, amount_fen, openid, trade_state,
+                                   notify_raw, verify_result, query_result, notify_count,
+                                   create_time, update_time, deleted)
+        VALUES (#{orderNo}, #{transactionId}, #{amountFen}, #{openid}, #{tradeState},
+                #{notifyRaw}, #{verifyResult}, #{queryResult}, #{notifyCount}, NOW(), NOW(), 0)
+    </insert>
+    <update id="increaseNotifyCount">
+        UPDATE payment_record
+        SET notify_count = notify_count + 1, notify_raw = #{notifyRaw},
+            verify_result = #{verifyResult}, update_time = NOW()
+        WHERE order_no = #{orderNo} AND deleted = 0
+    </update>
+    <select id="selectPage" resultType="com.dz.tavern.dao.entity.PaymentRecordEntity">
+        SELECT pr.*, o.user_id, o.store_id, u.nickname, u.phone
+        FROM payment_record pr
+        LEFT JOIN `order` o ON o.order_no = pr.order_no AND o.deleted = 0
+        LEFT JOIN `user` u ON u.id = o.user_id AND u.deleted = 0
+        WHERE pr.deleted = 0
+        <if test="storeId != null">AND o.store_id = #{storeId}</if>
+        <if test="orderNo != null and orderNo != ''">AND pr.order_no = #{orderNo}</if>
+        <if test="tradeState != null and tradeState != ''">AND pr.trade_state = #{tradeState}</if>
+        ORDER BY pr.id DESC LIMIT #{offset}, #{size}
+    </select>
+    <select id="countPage" resultType="long">
+        SELECT COUNT(*)
+        FROM payment_record pr
+        LEFT JOIN `order` o ON o.order_no = pr.order_no AND o.deleted = 0
+        WHERE pr.deleted = 0
+        <if test="storeId != null">AND o.store_id = #{storeId}</if>
+        <if test="orderNo != null and orderNo != ''">AND pr.order_no = #{orderNo}</if>
+        <if test="tradeState != null and tradeState != ''">AND pr.trade_state = #{tradeState}</if>
+    </select>
+</mapper>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.WechatAccessTokenMapper">
+    <select id="selectByTokenType"
+            resultType="com.dz.tavern.dao.entity.WechatAccessTokenEntity">
+        SELECT *
+        FROM wechat_access_token
+        WHERE token_type = #{tokenType}
+          AND deleted = 0
+    </select>
+
+    <insert id="upsert">
+        INSERT INTO wechat_access_token(
+            token_type, access_token, expire_time, version,
+            create_time, update_time, deleted
+        ) VALUES (
+            #{tokenType}, #{accessToken}, #{expireTime}, 0,
+            NOW(), NOW(), 0
+        )
+        ON DUPLICATE KEY UPDATE
+            access_token = VALUES(access_token),
+            expire_time = VALUES(expire_time),
+            version = version + 1,
+            update_time = NOW(),
+            deleted = 0
+    </insert>
+</mapper>

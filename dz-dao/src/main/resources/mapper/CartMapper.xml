@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.CartMapper">
+    <select id="selectByUserId" resultType="com.dz.tavern.dao.entity.CartEntity">
+        SELECT * FROM cart WHERE user_id = #{userId} AND deleted = 0 ORDER BY id DESC
+    </select>
+    <insert id="upsert">
+        INSERT INTO cart(user_id, sku_id, quantity, create_time, update_time, deleted)
+        VALUES (#{userId}, #{skuId}, #{quantity}, NOW(), NOW(), 0)
+        ON DUPLICATE KEY UPDATE
+            quantity = CASE
+                WHEN deleted = 1 THEN VALUES(quantity)
+                ELSE quantity + VALUES(quantity)
+            END,
+            update_time = NOW(),
+            deleted = 0
+    </insert>
+    <update id="updateQuantity">
+        UPDATE cart SET quantity = #{quantity}, update_time = NOW()
+        WHERE id = #{id} AND user_id = #{userId} AND deleted = 0
+    </update>
+    <update id="deleteByIdAndUserId">
+        UPDATE cart SET deleted = 1, update_time = NOW()
+        WHERE id = #{id} AND user_id = #{userId} AND deleted = 0
+    </update>
+    <update id="deleteBySkuIds">
+        UPDATE cart SET deleted = 1, update_time = NOW()
+        WHERE user_id = #{userId} AND deleted = 0 AND sku_id IN
+        <foreach collection="skuIds" item="skuId" open="(" separator="," close=")">#{skuId}</foreach>
+    </update>
+</mapper>

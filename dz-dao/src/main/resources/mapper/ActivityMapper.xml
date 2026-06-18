@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.ActivityMapper">
+    <select id="selectList" resultType="com.dz.tavern.dao.entity.ActivityEntity">
+        SELECT * FROM activity
+        WHERE deleted = 0
+        <if test="storeId != null">AND store_id = #{storeId}</if>
+        <if test="onlyActive">AND status = 1</if>
+        ORDER BY sort DESC, id DESC
+    </select>
+    <select id="selectById" resultType="com.dz.tavern.dao.entity.ActivityEntity">
+        SELECT * FROM activity WHERE id = #{id} AND deleted = 0
+    </select>
+    <insert id="insertActivity" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO activity(store_id, title, image_url, sort, status,
+                             create_time, update_time, deleted)
+        VALUES (#{storeId}, #{title}, #{imageUrl}, #{sort}, #{status}, NOW(), NOW(), 0)
+    </insert>
+    <update id="updateActivity">
+        UPDATE activity
+        SET store_id = #{storeId}, title = #{title}, image_url = #{imageUrl}, sort = #{sort},
+            status = #{status}, update_time = NOW()
+        WHERE id = #{id} AND deleted = 0
+    </update>
+    <update id="updateStatus">
+        UPDATE activity SET status = #{status}, update_time = NOW()
+        WHERE id = #{id} AND deleted = 0
+    </update>
+</mapper>

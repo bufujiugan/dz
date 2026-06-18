@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.RechargeOrderMapper">
+    <insert id="insertOrder" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO recharge_order(recharge_no, user_id, tier_id, pay_fen, bonus_fen,
+                                   status, credited, prepay_requested,
+                                   create_time, update_time, deleted)
+        VALUES (#{rechargeNo}, #{userId}, #{tierId}, #{payFen}, #{bonusFen},
+                #{status}, #{credited}, #{prepayRequested}, NOW(), NOW(), 0)
+    </insert>
+    <select id="selectByRechargeNo" resultType="com.dz.tavern.dao.entity.RechargeOrderEntity">
+        SELECT * FROM recharge_order WHERE recharge_no = #{rechargeNo} AND deleted = 0
+    </select>
+    <update id="markPaid">
+        UPDATE recharge_order SET status = 'PAID', update_time = NOW()
+        WHERE recharge_no = #{rechargeNo} AND status = 'CREATED' AND deleted = 0
+    </update>
+    <update id="markCredited">
+        UPDATE recharge_order SET credited = 1, update_time = NOW()
+        WHERE recharge_no = #{rechargeNo} AND status = 'PAID' AND credited = 0 AND deleted = 0
+    </update>
+    <update id="markPrepayRequested">
+        UPDATE recharge_order SET prepay_requested = 1, update_time = NOW()
+        WHERE recharge_no = #{rechargeNo} AND status = 'CREATED' AND deleted = 0
+    </update>
+    <select id="selectUserPage" resultType="com.dz.tavern.dao.entity.RechargeOrderEntity">
+        SELECT * FROM recharge_order
+        WHERE user_id = #{userId} AND deleted = 0
+        ORDER BY id DESC LIMIT #{offset}, #{size}
+    </select>
+    <select id="countUserPage" resultType="long">
+        SELECT COUNT(*) FROM recharge_order WHERE user_id = #{userId} AND deleted = 0
+    </select>
+    <select id="selectAdminPage" resultType="com.dz.tavern.dao.entity.RechargeOrderEntity">
+        SELECT ro.*, u.nickname, u.phone
+        FROM recharge_order ro
+        LEFT JOIN `user` u ON u.id = ro.user_id AND u.deleted = 0
+        WHERE ro.deleted = 0
+        <if test="storeId != null">AND u.store_id = #{storeId}</if>
+        <if test="rechargeNo != null and rechargeNo != ''">AND ro.recharge_no = #{rechargeNo}</if>
+        <if test="status != null and status != ''">AND ro.status = #{status}</if>
+        ORDER BY ro.id DESC LIMIT #{offset}, #{size}
+    </select>
+    <select id="countAdminPage" resultType="long">
+        SELECT COUNT(*)
+        FROM recharge_order ro
+        LEFT JOIN `user` u ON u.id = ro.user_id AND u.deleted = 0
+        WHERE ro.deleted = 0
+        <if test="storeId != null">AND u.store_id = #{storeId}</if>
+        <if test="rechargeNo != null and rechargeNo != ''">AND ro.recharge_no = #{rechargeNo}</if>
+        <if test="status != null and status != ''">AND ro.status = #{status}</if>
+    </select>
+</mapper>

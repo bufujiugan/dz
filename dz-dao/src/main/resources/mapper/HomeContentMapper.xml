@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.HomeContentMapper">
+    <select id="selectByStoreId" resultType="com.dz.tavern.dao.entity.HomeContentEntity">
+        SELECT * FROM home_content WHERE store_id = #{storeId} AND deleted = 0
+    </select>
+    <insert id="upsert">
+        INSERT INTO home_content(store_id, announcement, create_time, update_time, deleted)
+        VALUES (#{storeId}, #{announcement}, NOW(), NOW(), 0)
+        ON DUPLICATE KEY UPDATE announcement = VALUES(announcement), update_time = NOW(), deleted = 0
+    </insert>
+</mapper>

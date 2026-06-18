@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="DZ 餐酒馆运营管理后台">
+    <title>DZ 管理后台</title>
+    <link rel="stylesheet" href="./styles.css?v=20260617-store-switch">
+</head>
+<body>
+<div id="loginPage" class="login-page">
+    <section class="login-brand">
+        <div class="brand-mark">DZ</div>
+        <div>
+            <p class="eyebrow">TAVERN OPERATIONS</p>
+            <h1>把每一次经营动作<br>看得更清楚。</h1>
+            <p class="brand-copy">商品、订单、会员与资产数据集中管理，让日常运营保持轻盈而有序。</p>
+        </div>
+        <div class="brand-foot">
+            <span>数据驱动经营</span>
+            <span>权限安全可控</span>
+            <span>操作全程留痕</span>
+        </div>
+    </section>
+    <section class="login-panel">
+        <form id="loginForm" class="login-card">
+            <div class="mobile-brand">DZ</div>
+            <p class="eyebrow dark">WELCOME BACK</p>
+            <h2>登录管理后台</h2>
+            <p class="muted">使用管理员账号继续</p>
+            <label>
+                <span>账号</span>
+                <input id="loginUsername" name="username" autocomplete="username" value="admin" required>
+            </label>
+            <label>
+                <span>密码</span>
+                <div class="password-field">
+                    <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+                    <button id="togglePassword" class="text-button" type="button">显示</button>
+                </div>
+            </label>
+            <button id="loginButton" class="primary-button login-button" type="submit">进入后台</button>
+            <p id="loginError" class="form-error" role="alert"></p>
+            <p class="login-note">登录信息仅保存在当前浏览器中。</p>
+        </form>
+    </section>
+</div>
+
+<div id="appShell" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+        <div class="sidebar-head">
+            <div class="brand-mark small">DZ</div>
+            <div>
+                <strong>DZ Tavern</strong>
+                <span>运营管理中心</span>
+            </div>
+            <button id="closeSidebar" class="icon-button mobile-only" type="button" aria-label="关闭菜单">×</button>
+        </div>
+
+        <nav class="nav-list" aria-label="主导航">
+            <button class="nav-item active" data-view="dashboard" type="button">
+                <span class="nav-icon">总</span><span>经营总览</span>
+            </button>
+            <p class="nav-group">业务管理</p>
+            <button class="nav-item" data-view="users" data-permission="user:manage" type="button">
+                <span class="nav-icon">客</span><span>用户管理</span>
+            </button>
+            <button class="nav-item" data-view="products" data-permission="product:manage" type="button">
+                <span class="nav-icon">品</span><span>商品管理</span>
+            </button>
+            <button class="nav-item" data-view="stores" data-permission="product:manage" type="button">
+                <span class="nav-icon">店</span><span>门店管理</span>
+            </button>
+            <button class="nav-item" data-view="orders" data-permission="order:manage" type="button">
+                <span class="nav-icon">单</span><span>订单管理</span>
+            </button>
+            <button class="nav-item" data-view="payments" data-permission="pay:manage" type="button">
+                <span class="nav-icon">付</span><span>支付记录</span>
+            </button>
+            <p class="nav-group">门店运营</p>
+            <button class="nav-item" data-view="content" data-permission="content:manage" type="button">
+                <span class="nav-icon">营</span><span>运营内容</span>
+            </button>
+            <button class="nav-item" data-view="coupons" data-permission="coupon:manage" type="button">
+                <span class="nav-icon">券</span><span>卡券管理</span>
+            </button>
+            <button class="nav-item" data-view="statistics" data-permission="statistics:read" type="button">
+                <span class="nav-icon">统</span><span>销售统计</span>
+            </button>
+            <p class="nav-group">会员资产</p>
+            <button class="nav-item" data-view="recharges" data-permission="recharge:manage" type="button">
+                <span class="nav-icon">充</span><span>充值管理</span>
+            </button>
+            <button class="nav-item" data-view="storePoints" data-permission="points:audit" type="button">
+                <span class="nav-icon">积</span><span>门店积分</span>
+            </button>
+            <button class="nav-item" data-view="accounts" data-permission="account:adjust" type="button">
+                <span class="nav-icon">账</span><span>账户流水</span>
+            </button>
+            <p class="nav-group">系统审计</p>
+            <button class="nav-item" data-view="operations" data-permission="operation:read" type="button">
+                <span class="nav-icon">志</span><span>操作日志</span>
+            </button>
+            <button class="nav-item" data-view="reconcile" data-permission="reconcile:manage" type="button">
+                <span class="nav-icon">核</span><span>每日对账</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-user">
+            <div id="adminAvatar" class="avatar">管</div>
+            <div>
+                <strong id="adminName">管理员</strong>
+                <span>超级管理员</span>
+            </div>
+            <button id="logoutButton" class="logout-button" type="button">退出</button>
+        </div>
+    </aside>
+
+    <main class="main-content">
+        <header class="topbar">
+            <button id="openSidebar" class="icon-button mobile-only" type="button" aria-label="打开菜单">☰</button>
+            <div>
+                <p id="pageEyebrow" class="eyebrow dark">OVERVIEW</p>
+                <h2 id="pageTitle">经营总览</h2>
+            </div>
+            <div class="topbar-actions">
+                <label id="globalStoreField" class="global-store-field hidden">
+                    <span>当前门店</span>
+                    <select id="globalStoreSelect" aria-label="切换当前门店"></select>
+                </label>
+                <span id="currentDate" class="date-chip"></span>
+                <button id="refreshButton" class="secondary-button" type="button">刷新数据</button>
+            </div>
+        </header>
+
+        <section id="view-dashboard" class="view active">
+            <div class="dashboard-welcome">
+                <div>
+                    <h1 id="dashboardGreeting">欢迎回来，Admin</h1>
+                    <p>今天也是让酒馆生意亮起来的一天。</p>
+                </div>
+                <div class="dashboard-controls">
+                    <span id="dashboardDate" class="date-chip"></span>
+                    <label id="dashboardStoreField" class="global-store-field dashboard-store-field hidden">
+                        <span>当前门店</span>
+                        <select id="dashboardStoreSelect" aria-label="切换仪表盘门店"></select>
+                    </label>
+                </div>
+            </div>
+
+            <div class="tavern-hero">
+                <div class="tavern-hero__quote">
+                    <p>好酒不怕巷子深，</p>
+                    <p>但生意需要用心经营。</p>
+                    <span>— DZ Tavern</span>
+                </div>
+                <div id="heroMetricGrid" class="hero-metric-grid">
+                    <article><span>今日营业额</span><strong>--</strong><small>较昨日 --</small></article>
+                    <article><span>今日订单数</span><strong>--</strong><small>较昨日 --</small></article>
+                    <article><span>今日新增会员</span><strong>--</strong><small>较昨日 --</small></article>
+                </div>
+                <div class="tavern-hero__seal">DZ<br><span>TAVERN</span></div>
+            </div>
+
+            <div id="statGrid" class="stat-grid tavern-stat-grid">
+                <article class="stat-card loading-card"></article>
+                <article class="stat-card loading-card"></article>
+                <article class="stat-card loading-card"></article>
+                <article class="stat-card loading-card"></article>
+                <article class="stat-card loading-card"></article>
+            </div>
+
+            <div class="dashboard-analytics-grid">
+                <article class="panel sales-panel">
+                    <div class="panel-head">
+                        <div>
+                            <p class="panel-kicker">BUSINESS TREND</p>
+                            <h3>营业趋势</h3>
+                        </div>
+                        <div class="panel-tabs"><span class="active">近7天</span><span>近30天</span><span>自定义</span></div>
+                    </div>
+                    <div id="dashboardSalesChart" class="sales-chart loading-card"></div>
+                </article>
+                <article class="panel coupon-panel">
+                    <div class="panel-head">
+                        <div>
+                            <p class="panel-kicker">COUPON USAGE</p>
+                            <h3>卡券使用情况</h3>
+                        </div>
+                    </div>
+                    <div id="dashboardCouponUsage" class="coupon-usage loading-card"></div>
+                </article>
+                <article class="panel status-panel">
+                    <div class="panel-head">
+                        <div>
+                            <p class="panel-kicker">SYSTEM STATUS</p>
+                            <h3>系统状态</h3>
+                        </div>
+                    </div>
+                    <div class="status-list">
+                        <div><span><i class="status-dot ok"></i>管理服务</span><strong>运行正常</strong></div>
+                        <div><span><i class="status-dot ok"></i>数据库连接</span><strong>已连接</strong></div>
+                        <div><span><i class="status-dot mock"></i>微信能力</span><strong>Mock 模式</strong></div>
+                        <div><span><i class="status-dot ok"></i>卡券服务</span><strong>运行正常</strong></div>
+                    </div>
+                </article>
+            </div>
+
+            <div class="dashboard-bottom-grid">
+                <article class="panel recent-orders-panel">
+                    <div class="panel-head">
+                        <div>
+                            <p class="panel-kicker">RECENT ORDERS</p>
+                            <h3>最近订单</h3>
+                        </div>
+                        <button class="text-link" type="button" onclick="adminApp.jump('orders')">查看全部 ›</button>
+                    </div>
+                    <div id="dashboardRecentOrders" class="recent-orders loading-card"></div>
+                </article>
+                <article class="panel quick-actions-panel">
+                    <div class="panel-head">
+                        <div>
+                            <p class="panel-kicker">QUICK ACCESS</p>
+                            <h3>快捷操作</h3>
+                        </div>
+                    </div>
+                    <div class="quick-grid tavern-quick-grid">
+                        <button onclick="adminApp.jump('products')" type="button"><span>新增商品</span><small>维护菜单与价格</small></button>
+                        <button onclick="adminApp.jump('content')" type="button"><span>发布活动</span><small>配置首页与活动图</small></button>
+                        <button onclick="adminApp.jump('coupons')" type="button"><span>发放卡券</span><small>模板、赠送与核销</small></button>
+                        <button onclick="adminApp.jump('orders')" type="button"><span>订单查询</span><small>查看支付与制作状态</small></button>
+                        <button onclick="adminApp.jump('storePoints')" type="button"><span>核销记录</span><small>积分存取审核</small></button>
+                        <button onclick="adminApp.jump('users')" type="button"><span>会员管理</span><small>用户资料和资产</small></button>
+                        <button onclick="adminApp.jump('recharges')" type="button"><span>储值管理</span><small>充值档位和订单</small></button>
+                        <button onclick="adminApp.jump('statistics')" type="button"><span>数据报表</span><small>销售统计分析</small></button>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section id="view-users" class="view"></section>
+        <section id="view-products" class="view"></section>
+        <section id="view-stores" class="view"></section>
+        <section id="view-orders" class="view"></section>
+        <section id="view-payments" class="view"></section>
+        <section id="view-content" class="view"></section>
+        <section id="view-coupons" class="view"></section>
+        <section id="view-statistics" class="view"></section>
+        <section id="view-recharges" class="view"></section>
+        <section id="view-storePoints" class="view"></section>
+        <section id="view-accounts" class="view"></section>
+        <section id="view-operations" class="view"></section>
+        <section id="view-reconcile" class="view"></section>
+    </main>
+</div>
+
+<dialog id="editorDialog" class="dialog">
+    <form id="dialogForm" method="dialog">
+        <div class="dialog-head">
+            <div>
+                <p class="panel-kicker">DZ MANAGEMENT</p>
+                <h3 id="dialogTitle">编辑</h3>
+            </div>
+            <button id="closeDialog" class="icon-button" type="button" aria-label="关闭">×</button>
+        </div>
+        <div id="dialogBody" class="dialog-body"></div>
+        <div id="dialogActions" class="dialog-actions">
+            <button id="cancelDialog" class="secondary-button" type="button">取消</button>
+            <button id="submitDialog" class="primary-button" type="submit">确认</button>
+        </div>
+    </form>
+</dialog>
+
+<div id="toastArea" class="toast-area" aria-live="polite"></div>
+<div id="loadingMask" class="loading-mask hidden">
+    <div class="spinner"></div>
+    <span>正在处理</span>
+</div>
+<script src="./app.js?v=20260617-store-switch"></script>
+</body>
+</html>

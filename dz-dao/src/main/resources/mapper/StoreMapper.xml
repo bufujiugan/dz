@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.StoreMapper">
+    <select id="selectActiveList" resultType="com.dz.tavern.dao.entity.StoreEntity">
+        SELECT * FROM store WHERE status = 1 AND deleted = 0 ORDER BY id
+    </select>
+    <sql id="pageConditions">
+        deleted = 0
+        <if test="keyword != null and keyword != ''">
+            AND (name LIKE CONCAT('%', #{keyword}, '%')
+                 OR address LIKE CONCAT('%', #{keyword}, '%')
+                 OR phone LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+        <if test="status != null">AND status = #{status}</if>
+    </sql>
+    <select id="selectPage" resultType="com.dz.tavern.dao.entity.StoreEntity">
+        SELECT * FROM store WHERE <include refid="pageConditions"/>
+        ORDER BY id DESC LIMIT #{offset}, #{size}
+    </select>
+    <select id="countPage" resultType="long">
+        SELECT COUNT(*) FROM store WHERE <include refid="pageConditions"/>
+    </select>
+    <select id="selectById" resultType="com.dz.tavern.dao.entity.StoreEntity">
+        SELECT * FROM store WHERE id = #{id} AND deleted = 0
+    </select>
+    <insert id="insertStore" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO store(name, address, phone, status, create_time, update_time, deleted)
+        VALUES (#{name}, #{address}, #{phone}, #{status}, NOW(), NOW(), 0)
+    </insert>
+    <update id="updateStore">
+        UPDATE store
+        SET name = #{name}, address = #{address}, phone = #{phone},
+            status = #{status}, update_time = NOW()
+        WHERE id = #{id} AND deleted = 0
+    </update>
+    <update id="updateStatus">
+        UPDATE store SET status = #{status}, update_time = NOW()
+        WHERE id = #{id} AND deleted = 0
+    </update>
+</mapper>

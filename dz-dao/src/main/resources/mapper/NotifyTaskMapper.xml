@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.NotifyTaskMapper">
+    <insert id="insertTask" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO notify_task(user_id, template_type, data, status, retry_count,
+                                next_retry_time, last_error, create_time, update_time, deleted)
+        VALUES (#{userId}, #{templateType}, #{data}, #{status}, #{retryCount},
+                #{nextRetryTime}, #{lastError}, NOW(), NOW(), 0)
+    </insert>
+    <select id="selectPending" resultType="com.dz.tavern.dao.entity.NotifyTaskEntity">
+        SELECT * FROM notify_task
+        WHERE status = 'PENDING' AND next_retry_time &lt;= #{now} AND deleted = 0
+        ORDER BY id LIMIT #{limit}
+    </select>
+    <update id="markSuccess">
+        UPDATE notify_task SET status = 'SUCCESS', update_time = NOW()
+        WHERE id = #{id} AND status = 'PENDING' AND deleted = 0
+    </update>
+    <update id="markFailure">
+        UPDATE notify_task
+        SET retry_count = #{retryCount}, status = #{status}, next_retry_time = #{nextRetryTime},
+            last_error = #{lastError}, update_time = NOW()
+        WHERE id = #{id} AND status = 'PENDING' AND deleted = 0
+    </update>
+</mapper>

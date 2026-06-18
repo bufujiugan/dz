@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.dz.tavern.dao.mapper.IdempotentRecordMapper">
+    <insert id="tryAcquire">
+        INSERT INTO idempotent_record(idempotent_key, status, expire_time,
+                                      create_time, update_time, deleted)
+        VALUES (#{idempotentKey}, 'PROCESSING', #{expireTime}, NOW(), NOW(), 0)
+        ON DUPLICATE KEY UPDATE
+            status = IF(expire_time &lt; NOW(), 'PROCESSING', status),
+            expire_time = IF(expire_time &lt; NOW(), VALUES(expire_time), expire_time),
+            update_time = IF(expire_time &lt; NOW(), NOW(), update_time)
+    </insert>
+    <update id="markSuccess">
+        UPDATE idempotent_record
+        SET status = 'SUCCESS', expire_time = DATE_ADD(NOW(), INTERVAL 1 DAY), update_time = NOW()
+        WHERE idempotent_key = #{idempotentKey} AND deleted = 0
+    </update>
+    <select id="selectStatus" resultType="string">
+        SELECT status FROM idempotent_record
+        WHERE idempotent_key = #{idempotentKey} AND deleted = 0
+    </select>
+</mapper>

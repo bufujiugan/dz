@@ -1,0 +1,4 @@
+spring:
+  sql:
+    init:
+      data-locations: classpath:sql/mock-data.sql

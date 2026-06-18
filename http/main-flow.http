@@ -1,0 +1,164 @@
+@api = http://localhost:8080
+@admin = http://localhost:8081
+@token = 请先执行登录并填入token
+@adminToken = 请从管理端登录结果填入token
+@orderNo = 请填入下单返回的orderNo
+@rechargeNo = 请填入充值创建返回的rechargeNo
+
+### 小程序 mock 登录
+POST {{api}}/api/auth/login
+Content-Type: application/json
+
+{
+  "code": "demo"
+}
+
+### 小程序首次授权头像昵称（phoneCode 可选）
+POST {{api}}/api/auth/authorize
+Content-Type: application/json
+
+{
+  "loginCode": "demo",
+  "nickname": "DZ会员",
+  "avatar": "https://example.com/avatar.png"
+}
+
+### 小程序首次完整授权（登录 + 头像昵称 + 手机号）
+POST {{api}}/api/auth/authorize
+Content-Type: application/json
+
+{
+  "loginCode": "demo",
+  "phoneCode": "13800138000",
+  "nickname": "DZ会员",
+  "avatar": "https://example.com/avatar.png"
+}
+
+### 用户资料
+GET {{api}}/api/user/profile
+Authorization: Bearer {{token}}
+
+### 门店
+GET {{api}}/api/store/list
+Authorization: Bearer {{token}}
+
+### 商品
+GET {{api}}/api/product/page?storeId=1&current=1&size=10
+Authorization: Bearer {{token}}
+
+### 创建微信支付订单，金额由后端按 SKU 计算
+POST {{api}}/api/order/create
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "storeId": 1,
+  "items": [
+    {
+      "skuId": 1,
+      "quantity": 1,
+      "expectedPriceFen": 2800
+    }
+  ],
+  "payType": "WECHAT",
+  "remark": "少冰"
+}
+
+### 发起 mock 预支付
+POST {{api}}/api/pay/prepay
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "orderNo": "{{orderNo}}"
+}
+
+### mock 微信支付成功通知
+POST {{api}}/api/pay/notify/wechat
+X-Mock-Signature: valid
+Content-Type: application/json
+
+{
+  "orderNo": "{{orderNo}}",
+  "transactionId": "MOCK_TX_001",
+  "amountFen": 2800,
+  "openid": "mock-openid-demo"
+}
+
+### 创建余额支付订单
+POST {{api}}/api/order/create
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "storeId": 1,
+  "items": [
+    {
+      "skuId": 2,
+      "quantity": 1,
+      "expectedPriceFen": 3600
+    }
+  ],
+  "payType": "BALANCE",
+  "remark": ""
+}
+
+### 创建充值单并返回 mock 预支付参数
+POST {{api}}/api/recharge/create
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "tierId": 2
+}
+
+### mock 充值支付通知
+POST {{api}}/api/pay/notify/wechat
+X-Mock-Signature: valid
+Content-Type: application/json
+
+{
+  "orderNo": "{{rechargeNo}}",
+  "transactionId": "MOCK_RECHARGE_TX_001",
+  "amountFen": 30000,
+  "openid": "mock-openid-demo"
+}
+
+### 申请取积分
+POST {{api}}/api/points/withdraw
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "points": 100,
+  "remark": "线下兑换",
+  "voucherImages": []
+}
+
+### 管理端登录，首次密码查看 dz-admin 启动日志
+POST {{admin}}/admin-api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "请填首次启动日志中的随机密码"
+}
+
+### 管理端订单列表
+GET {{admin}}/admin-api/order/page?current=1&size=10
+Authorization: Bearer {{adminToken}}
+
+### 管理端积分审核
+POST {{admin}}/admin-api/points/audit
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "requestId": 1,
+  "approve": true,
+  "auditRemark": "凭证有效"
+}
+
+### 管理端账户流水导出
+GET {{admin}}/admin-api/account/logs/export?userId=1
+Authorization: Bearer {{adminToken}}
