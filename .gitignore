@@ -3,6 +3,8 @@ target/
 .vscode/
 .codex-run-logs/
 *.iml
+__pycache__/
+*.pyc
 logs/
 uploads/
 .env

@@ -1,0 +1,660 @@
+#!/usr/bin/env python3
+"""
+Deploy DZ Tavern backend services on a Linux server.
+
+What it does:
+  1. Installs Git, JDK 17, Maven, MySQL and Nginx with the system package manager.
+  2. Clones or updates https://github.com/bufujiugan/dz.git.
+  3. Builds dz-api and dz-admin with Maven.
+  4. Creates the dz database and dz_app database user.
+  5. Writes /etc/dz/dz.env.
+  6. Installs and restarts systemd services: dz-api and dz-admin.
+  7. Optionally writes an Nginx reverse proxy config.
+
+Run as root:
+  python3 deploy_dz_server.py --configure-nginx --server-name YOUR_SERVER_IP
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+import textwrap
+import time
+from pathlib import Path
+
+
+DEFAULT_REPO = "https://github.com/bufujiugan/dz.git"
+DEFAULT_BRANCH = "main"
+API_JAR_NAME = "dz-api-1.0.0-SNAPSHOT.jar"
+ADMIN_JAR_NAME = "dz-admin-1.0.0-SNAPSHOT.jar"
+
+
+class DeployError(RuntimeError):
+    pass
+
+
+def info(message: str) -> None:
+    print(f"\n==> {message}", flush=True)
+
+
+def warn(message: str) -> None:
+    print(f"\n[WARN] {message}", flush=True)
+
+
+def fail(message: str) -> None:
+    raise DeployError(message)
+
+
+def run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    input_text: str | None = None,
+    check: bool = True,
+    quiet: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    if not quiet:
+        location = f" (cwd={cwd})" if cwd else ""
+        print(f"$ {' '.join(command)}{location}", flush=True)
+    completed = subprocess.run(
+        command,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        input=input_text,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if not quiet and completed.stdout:
+        print(completed.stdout.rstrip(), flush=True)
+    if check and completed.returncode != 0:
+        output = completed.stdout.strip()
+        raise DeployError(
+            f"Command failed with exit code {completed.returncode}: {' '.join(command)}\n{output}"
+        )
+    return completed
+
+
+def require_root() -> None:
+    if os.name != "posix":
+        fail("This script only supports Linux servers.")
+    if os.geteuid() != 0:
+        fail("Please run this script as root, for example: sudo python3 deploy_dz_server.py")
+
+
+def command_exists(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def detect_package_manager() -> str:
+    for manager in ("apt-get", "dnf", "yum"):
+        if command_exists(manager):
+            return manager
+    fail("No supported package manager found. Supported: apt-get, dnf, yum.")
+    return ""
+
+
+def install_packages(skip_install: bool) -> None:
+    if skip_install:
+        info("Skipping package installation because --skip-install was provided.")
+        return
+
+    manager = detect_package_manager()
+    info(f"Installing required packages with {manager}")
+    if manager == "apt-get":
+        env = dict(os.environ)
+        env["DEBIAN_FRONTEND"] = "noninteractive"
+        run(["apt-get", "update"], env=env)
+        run(
+            [
+                "apt-get",
+                "install",
+                "-y",
+                "git",
+                "curl",
+                "nginx",
+                "mysql-server",
+                "maven",
+                "openjdk-17-jdk",
+            ],
+            env=env,
+        )
+        return
+
+    if manager in ("dnf", "yum"):
+        base_packages = ["git", "curl", "nginx", "maven", "java-17-openjdk-devel"]
+        run([manager, "install", "-y", *base_packages])
+        mysql_result = run([manager, "install", "-y", "mysql-server"], check=False)
+        if mysql_result.returncode != 0:
+            warn("mysql-server package was not available. Trying mariadb-server.")
+            run([manager, "install", "-y", "mariadb-server"])
+        return
+
+
+def start_first_existing_service(candidates: list[str], *, required: bool) -> str | None:
+    for service in candidates:
+        result = run(["systemctl", "list-unit-files", f"{service}.service"], check=False, quiet=True)
+        if service in result.stdout:
+            run(["systemctl", "enable", "--now", service])
+            return service
+    if required:
+        fail(f"None of these services exists: {', '.join(candidates)}")
+    return None
+
+
+def start_platform_services(skip_mysql: bool) -> str | None:
+    info("Starting platform services")
+    mysql_service = None
+    if not skip_mysql:
+        mysql_service = start_first_existing_service(["mysql", "mysqld", "mariadb"], required=True)
+    start_first_existing_service(["nginx"], required=False)
+    return mysql_service
+
+
+def sql_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+def run_mysql(sql: str, mysql_root_password: str | None) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    if mysql_root_password:
+        env["MYSQL_PWD"] = mysql_root_password
+    return run(["mysql", "-uroot"], env=env, input_text=sql, check=False, quiet=True)
+
+
+def configure_mysql(args: argparse.Namespace, generated: dict[str, str]) -> None:
+    if args.skip_mysql:
+        info("Skipping MySQL initialization because --skip-mysql was provided.")
+        return
+
+    info("Creating database and database user")
+    db_password = args.db_password
+    if not db_password:
+        if args.non_interactive:
+            db_password = secrets.token_urlsafe(24)
+            generated["db_password"] = db_password
+        else:
+            db_password = getpass.getpass(
+                "Set password for MySQL user dz_app (blank = generate one): "
+            ).strip()
+            if not db_password:
+                db_password = secrets.token_urlsafe(24)
+                generated["db_password"] = db_password
+
+    args.db_password = db_password
+
+    sql = f"""
+CREATE DATABASE IF NOT EXISTS `{args.db_name}`
+  DEFAULT CHARACTER SET utf8mb4
+  DEFAULT COLLATE utf8mb4_unicode_ci;
+
+CREATE USER IF NOT EXISTS '{args.db_user}'@'localhost' IDENTIFIED BY {sql_string(db_password)};
+CREATE USER IF NOT EXISTS '{args.db_user}'@'127.0.0.1' IDENTIFIED BY {sql_string(db_password)};
+ALTER USER '{args.db_user}'@'localhost' IDENTIFIED BY {sql_string(db_password)};
+ALTER USER '{args.db_user}'@'127.0.0.1' IDENTIFIED BY {sql_string(db_password)};
+
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
+ON `{args.db_name}`.* TO '{args.db_user}'@'localhost';
+
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
+ON `{args.db_name}`.* TO '{args.db_user}'@'127.0.0.1';
+
+FLUSH PRIVILEGES;
+"""
+
+    result = run_mysql(sql, args.mysql_root_password)
+    if result.returncode == 0:
+        print("MySQL database initialization completed.", flush=True)
+        return
+
+    if args.mysql_root_password:
+        fail("MySQL initialization failed. Please check --mysql-root-password.")
+
+    if args.non_interactive:
+        fail(
+            "MySQL root login without password failed. Re-run with --mysql-root-password "
+            "or initialize the database manually."
+        )
+
+    warn("MySQL root login without password failed.")
+    root_password = getpass.getpass("Enter MySQL root password: ").strip()
+    result = run_mysql(sql, root_password)
+    if result.returncode != 0:
+        fail("MySQL initialization failed:\n" + result.stdout.strip())
+    args.mysql_root_password = root_password
+    print("MySQL database initialization completed.", flush=True)
+
+
+def ensure_directories(args: argparse.Namespace) -> None:
+    info("Creating deployment directories")
+    for path in [
+        args.base_dir,
+        args.source_dir,
+        args.app_dir,
+        args.backup_dir,
+        args.upload_dir,
+        args.config_dir,
+        args.log_dir,
+    ]:
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def update_source(args: argparse.Namespace) -> None:
+    info("Cloning or updating project source")
+    git_dir = args.source_dir / ".git"
+    if git_dir.exists():
+        run(["git", "remote", "set-url", "origin", args.repo], cwd=args.source_dir)
+        run(["git", "fetch", "origin", args.branch], cwd=args.source_dir)
+        run(["git", "checkout", args.branch], cwd=args.source_dir)
+        run(["git", "pull", "--ff-only", "origin", args.branch], cwd=args.source_dir)
+        return
+
+    if args.source_dir.exists() and any(args.source_dir.iterdir()):
+        fail(
+            f"{args.source_dir} already exists but is not a Git repository. "
+            "Move it manually or choose another --base-dir."
+        )
+
+    run(["git", "clone", "--branch", args.branch, args.repo, str(args.source_dir)])
+
+
+def build_project(args: argparse.Namespace) -> None:
+    info("Building project with Maven")
+    run(["mvn", "clean", "package", "-DskipTests"], cwd=args.source_dir)
+
+
+def find_jar(module_dir: Path, jar_name: str) -> Path:
+    expected = module_dir / "target" / jar_name
+    if expected.exists():
+        return expected
+    matches = sorted((module_dir / "target").glob("*.jar"))
+    if not matches:
+        fail(f"No jar file found under {module_dir / 'target'}")
+    return matches[0]
+
+
+def backup_existing(path: Path, backup_dir: Path) -> None:
+    if not path.exists():
+        return
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"{path.stem}-{timestamp}{path.suffix}"
+    shutil.copy2(path, backup_path)
+    print(f"Backed up {path} -> {backup_path}", flush=True)
+
+
+def install_jars(args: argparse.Namespace) -> None:
+    info("Installing built jar files")
+    api_jar = find_jar(args.source_dir / "dz-api", API_JAR_NAME)
+    admin_jar = find_jar(args.source_dir / "dz-admin", ADMIN_JAR_NAME)
+    target_api = args.app_dir / "dz-api.jar"
+    target_admin = args.app_dir / "dz-admin.jar"
+
+    backup_existing(target_api, args.backup_dir)
+    backup_existing(target_admin, args.backup_dir)
+
+    shutil.copy2(api_jar, target_api)
+    shutil.copy2(admin_jar, target_admin)
+    print(f"Installed {target_api}", flush=True)
+    print(f"Installed {target_admin}", flush=True)
+
+
+def parse_bool_text(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "y", "on"):
+        return True
+    if normalized in ("0", "false", "no", "n", "off"):
+        return False
+    fail(f"Invalid boolean value: {value}")
+    return None
+
+
+def yes_no_prompt(message: str, default: bool) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    answer = input(f"{message} [{suffix}]: ").strip().lower()
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def collect_runtime_config(args: argparse.Namespace, generated: dict[str, str]) -> None:
+    info("Collecting runtime configuration")
+
+    if not args.jwt_secret:
+        args.jwt_secret = secrets.token_hex(32)
+        generated["jwt_secret"] = args.jwt_secret
+
+    if not args.admin_password:
+        if args.non_interactive:
+            args.admin_password = secrets.token_urlsafe(18)
+            generated["admin_password"] = args.admin_password
+        else:
+            value = getpass.getpass(
+                "Set initial admin password for username admin (blank = generate one): "
+            ).strip()
+            if value:
+                args.admin_password = value
+            else:
+                args.admin_password = secrets.token_urlsafe(18)
+                generated["admin_password"] = args.admin_password
+
+    if not args.wechat_app_id and not args.non_interactive:
+        args.wechat_app_id = input("WECHAT_APP_ID (blank if not ready): ").strip()
+
+    if not args.wechat_app_secret and not args.non_interactive:
+        args.wechat_app_secret = getpass.getpass(
+            "WECHAT_APP_SECRET (blank if not ready): "
+        ).strip()
+
+    mock_value = parse_bool_text(args.wechat_auth_mock)
+    if mock_value is None:
+        # Keep the service usable when real WeChat credentials are not ready.
+        mock_value = not (args.wechat_app_id and args.wechat_app_secret)
+    args.wechat_auth_mock_value = "true" if mock_value else "false"
+
+
+def write_runtime_env(args: argparse.Namespace) -> None:
+    info("Writing runtime environment file")
+    env_path = args.config_dir / "dz.env"
+    backup_existing(env_path, args.backup_dir)
+
+    content = textwrap.dedent(
+        f"""\
+        DB_URL=jdbc:mysql://127.0.0.1:3306/{args.db_name}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+        DB_USERNAME={args.db_user}
+        DB_PASSWORD={args.db_password}
+        JWT_SECRET={args.jwt_secret}
+        ADMIN_INITIAL_PASSWORD={args.admin_password}
+        WECHAT_MOCK_ENABLED=true
+        WECHAT_AUTH_MOCK_ENABLED={args.wechat_auth_mock_value}
+        WECHAT_APP_ID={args.wechat_app_id or ""}
+        WECHAT_APP_SECRET={args.wechat_app_secret or ""}
+        WECHAT_MCH_ID={args.wechat_mch_id or ""}
+        WECHAT_MERCHANT_PRIVATE_KEY_PATH={args.wechat_merchant_private_key_path or ""}
+        WECHAT_MERCHANT_SERIAL_NUMBER={args.wechat_merchant_serial_number or ""}
+        WECHAT_API_V3_KEY={args.wechat_api_v3_key or ""}
+        UPLOAD_ROOT={args.upload_dir}
+        """
+    )
+    env_path.write_text(content, encoding="utf-8")
+    env_path.chmod(0o600)
+    print(f"Wrote {env_path}", flush=True)
+
+
+def service_unit(name: str, jar_path: Path, args: argparse.Namespace) -> str:
+    java_path = shutil.which("java") or "/usr/bin/java"
+    return textwrap.dedent(
+        f"""\
+        [Unit]
+        Description=DZ Tavern {name} Service
+        After=network.target mysql.service mysqld.service mariadb.service
+
+        [Service]
+        Type=simple
+        WorkingDirectory={args.app_dir}
+        EnvironmentFile={args.config_dir / "dz.env"}
+        ExecStart={java_path} -jar {jar_path}
+        Restart=always
+        RestartSec=5
+        SuccessExitStatus=143
+        StandardOutput=append:{args.log_dir / f"{name}.out.log"}
+        StandardError=append:{args.log_dir / f"{name}.err.log"}
+
+        [Install]
+        WantedBy=multi-user.target
+        """
+    )
+
+
+def install_systemd_services(args: argparse.Namespace) -> None:
+    info("Installing systemd services")
+    services = {
+        "dz-api": args.app_dir / "dz-api.jar",
+        "dz-admin": args.app_dir / "dz-admin.jar",
+    }
+    for service_name, jar_path in services.items():
+        unit_path = Path("/etc/systemd/system") / f"{service_name}.service"
+        backup_existing(unit_path, args.backup_dir)
+        unit_path.write_text(service_unit(service_name, jar_path, args), encoding="utf-8")
+        print(f"Wrote {unit_path}", flush=True)
+
+    run(["systemctl", "daemon-reload"])
+    for service_name in services:
+        run(["systemctl", "enable", service_name])
+        run(["systemctl", "restart", service_name])
+        run(["systemctl", "status", service_name, "--no-pager"], check=False)
+
+
+def nginx_proxy_headers() -> str:
+    return textwrap.dedent(
+        """\
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        """
+    ).rstrip()
+
+
+def configure_nginx(args: argparse.Namespace) -> None:
+    should_configure = args.configure_nginx
+    if not should_configure and not args.non_interactive:
+        should_configure = yes_no_prompt("Configure Nginx reverse proxy now?", False)
+    if not should_configure:
+        info("Skipping Nginx reverse proxy configuration.")
+        return
+
+    server_name = args.server_name
+    if not server_name:
+        if args.non_interactive:
+            server_name = "_"
+        else:
+            server_name = input("Nginx server_name, domain or server IP (blank = _): ").strip() or "_"
+    args.server_name = server_name
+
+    info("Writing Nginx reverse proxy configuration")
+    nginx_dir = Path("/etc/nginx/conf.d")
+    nginx_dir.mkdir(parents=True, exist_ok=True)
+    config_path = nginx_dir / "dz.conf"
+    backup_existing(config_path, args.backup_dir)
+    headers = nginx_proxy_headers()
+    config = textwrap.dedent(
+        f"""\
+        server {{
+            listen 80;
+            server_name {server_name};
+
+            client_max_body_size 20m;
+
+            location /api/ {{
+                proxy_pass http://127.0.0.1:8080;
+                {headers}
+            }}
+
+            location /uploads/ {{
+                proxy_pass http://127.0.0.1:8080;
+                {headers}
+            }}
+
+            location /admin-api/ {{
+                proxy_pass http://127.0.0.1:8081;
+                {headers}
+            }}
+
+            location /admin/ {{
+                proxy_pass http://127.0.0.1:8081;
+                {headers}
+            }}
+
+            location / {{
+                proxy_pass http://127.0.0.1:8081;
+                {headers}
+            }}
+        }}
+        """
+    )
+    config_path.write_text(config, encoding="utf-8")
+
+    test_result = run(["nginx", "-t"], check=False)
+    if test_result.returncode != 0:
+        fail("Nginx config test failed. Please fix /etc/nginx/conf.d/dz.conf manually.")
+    run(["systemctl", "reload", "nginx"])
+    print(f"Wrote {config_path}", flush=True)
+
+
+def verify_services() -> None:
+    info("Verifying local service endpoints")
+    for service_name in ("dz-api", "dz-admin"):
+        run(["systemctl", "is-active", service_name], check=False)
+
+    if command_exists("curl"):
+        run(["curl", "-I", "http://127.0.0.1:8081/admin/"], check=False)
+        run(["curl", "-I", "http://127.0.0.1:8080/swagger-ui.html"], check=False)
+
+
+def normalize_paths(args: argparse.Namespace) -> None:
+    args.base_dir = Path(args.base_dir)
+    args.source_dir = args.base_dir / "source"
+    args.app_dir = args.base_dir / "apps"
+    args.backup_dir = args.base_dir / "backups"
+    args.upload_dir = Path(args.upload_dir) if args.upload_dir else args.base_dir / "uploads"
+    args.config_dir = Path(args.config_dir)
+    args.log_dir = Path(args.log_dir)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Install environment and deploy DZ Tavern backend services."
+    )
+    parser.add_argument("--repo", default=DEFAULT_REPO, help="Git repository URL.")
+    parser.add_argument("--branch", default=DEFAULT_BRANCH, help="Git branch to deploy.")
+    parser.add_argument("--base-dir", default="/opt/dz", help="Base deployment directory.")
+    parser.add_argument("--config-dir", default="/etc/dz", help="Directory for dz.env.")
+    parser.add_argument("--log-dir", default="/var/log/dz", help="Directory for service logs.")
+    parser.add_argument("--upload-dir", default="", help="Upload directory. Default: BASE_DIR/uploads.")
+
+    parser.add_argument("--db-name", default="dz", help="MySQL database name.")
+    parser.add_argument("--db-user", default="dz_app", help="MySQL application user.")
+    parser.add_argument("--db-password", default="", help="MySQL application user password.")
+    parser.add_argument("--mysql-root-password", default="", help="MySQL root password if required.")
+
+    parser.add_argument("--admin-password", default="", help="Initial password for admin username.")
+    parser.add_argument("--jwt-secret", default="", help="JWT secret, at least 32 characters.")
+    parser.add_argument("--wechat-app-id", default="", help="WeChat app id.")
+    parser.add_argument("--wechat-app-secret", default="", help="WeChat app secret.")
+    parser.add_argument(
+        "--wechat-auth-mock",
+        default=None,
+        help="true or false. Default: true when WeChat credentials are blank, otherwise false.",
+    )
+    parser.add_argument("--wechat-mch-id", default="", help="WeChat merchant id.")
+    parser.add_argument(
+        "--wechat-merchant-private-key-path",
+        default="",
+        help="WeChat merchant private key path.",
+    )
+    parser.add_argument(
+        "--wechat-merchant-serial-number",
+        default="",
+        help="WeChat merchant certificate serial number.",
+    )
+    parser.add_argument("--wechat-api-v3-key", default="", help="WeChat Pay API v3 key.")
+
+    parser.add_argument("--skip-install", action="store_true", help="Do not install OS packages.")
+    parser.add_argument("--skip-mysql", action="store_true", help="Do not initialize MySQL.")
+    parser.add_argument(
+        "--configure-nginx",
+        action="store_true",
+        help="Write /etc/nginx/conf.d/dz.conf reverse proxy config.",
+    )
+    parser.add_argument("--server-name", default="", help="Nginx server_name, domain or IP.")
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Do not prompt. Missing secrets will be generated.",
+    )
+    return parser
+
+
+def print_summary(args: argparse.Namespace, generated: dict[str, str]) -> None:
+    public_host = args.server_name if args.server_name and args.server_name != "_" else "SERVER_IP"
+    print(
+        textwrap.dedent(
+            f"""
+
+            Deployment finished.
+
+            Local checks:
+              systemctl status dz-api --no-pager
+              systemctl status dz-admin --no-pager
+              curl -I http://127.0.0.1:8081/admin/
+
+            Service logs:
+              journalctl -u dz-api -f
+              journalctl -u dz-admin -f
+              tail -f {args.log_dir}/dz-api.out.log
+              tail -f {args.log_dir}/dz-admin.out.log
+
+            Admin URL:
+              http://{public_host}/admin/
+
+            Admin username:
+              admin
+            """
+        ).rstrip(),
+        flush=True,
+    )
+    if "admin_password" in generated:
+        print(f"Generated admin password: {generated['admin_password']}", flush=True)
+    else:
+        print("Admin password: the value you provided in this script run.", flush=True)
+
+    if "db_password" in generated:
+        print("Generated DB password was written to the env file.", flush=True)
+    if "jwt_secret" in generated:
+        print("Generated JWT secret was written to the env file.", flush=True)
+    print(f"Env file: {args.config_dir / 'dz.env'}", flush=True)
+    print("Do not share the env file or screenshots containing secrets.", flush=True)
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    normalize_paths(args)
+    generated: dict[str, str] = {}
+
+    try:
+        require_root()
+        install_packages(args.skip_install)
+        start_platform_services(args.skip_mysql)
+        ensure_directories(args)
+        configure_mysql(args, generated)
+        collect_runtime_config(args, generated)
+        update_source(args)
+        build_project(args)
+        install_jars(args)
+        write_runtime_env(args)
+        install_systemd_services(args)
+        configure_nginx(args)
+        verify_services()
+        print_summary(args, generated)
+        return 0
+    except DeployError as exc:
+        print(f"\nERROR: {exc}", file=sys.stderr, flush=True)
+        return 1
+    except KeyboardInterrupt:
+        print("\nCanceled by user.", file=sys.stderr, flush=True)
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
